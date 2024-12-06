@@ -1,0 +1,725 @@
+# unit.py
+# 유닛데이터
+
+import pickle
+import random
+import time
+
+class Unit:
+    def __init__(self, role, health, attack, defense, range, speed, vision=50, can_transmit=False, 
+                 view_angle=120, view_direction=0, attack_power=10, support_ability=False, grenade=False, 
+                 morale=100, heal_limit=0, reload_time=1, x=0, y=0, armor=False, recon_range=0, 
+                 surveillance_equipment=False, is_ship=False):  # is_ship을 추가
+        self.role = role
+        self.health = health
+        self.attack = attack
+        self.defense = defense
+        self.range = range
+        self.speed = speed
+        self.vision = vision
+        self.can_transmit = can_transmit
+        self.view_angle = view_angle
+        self.view_direction = view_direction
+        self.attack_power = attack_power
+        self.support_ability = support_ability
+        self.grenade = grenade
+        self.morale = morale
+        self.heal_limit = heal_limit
+        self.healed_count = 0
+        self.reload_time = reload_time  # 장전 시간
+        self.last_attack_time = time.time() - reload_time  # 초기화 시 공격 가능하게 설정
+        self.x = x  # 좌표 초기화
+        self.y = y  # 좌표 초기화
+        self.armor = armor
+        self.recon_range = recon_range
+        self.surveillance_equipment = surveillance_equipment
+        self.is_ship = is_ship  # 함대 여부 체크
+        
+        # 통신병에게만 위치를 기록하는 속성 추가
+        self.reported_positions = [] if self.can_transmit else None
+
+    def can_attack(self):
+        """현재 시점에서 공격이 가능한지 확인하는 메서드"""
+        return time.time() - self.last_attack_time >= self.reload_time
+
+    def attack_enemy(self, enemy):
+        if self.can_attack():
+            enemy.health -= max(1, self.attack_power - enemy.defense)
+            self.last_attack_time = time.time()  # 공격 후 시간 업데이트
+
+    def heal(self, ally):
+        """의무병이 아군을 치료하는 메서드"""
+        if self.healed_count < self.heal_limit:
+            ally.health += 15
+            self.healed_count += 1
+
+    def update_position(self, new_x, new_y):
+        """유닛의 위치 업데이트 메서드"""
+        self.x = new_x
+        self.y = new_y
+
+    def can_call_airstrike(self):
+        """포격 지원 가능 여부를 반환하는 메서드"""
+        return True  # 기본적으로 모든 유닛이 호출할 수 없도록 설정
+
+    def call_airstrike(self, target_x, target_y):
+        """포격을 호출하는 메서드"""
+        if self.can_call_airstrike():
+            return {"x": target_x, "y": target_y, "damage": 100, "radius": 150}
+        return None
+
+    def call_ship_attack(self, target_x, target_y):
+        """함대 포격 호출"""
+        if self.is_ship:  # 함대 유닛인 경우에만 포격
+            return {"x": target_x, "y": target_y, "damage": 150, "radius": 200}
+        return None
+
+# 특정 유닛 종류들 (저격병, 대전차, 드론, 의무병 등)
+def create_team():
+    team = []
+    
+    # 일반병사 50명 생성
+    for _ in range(50):
+        health = random.randint(85, 95)
+        attack = random.randint(12, 14)
+        defense = random.randint(6, 8)
+        range_val = random.randint(40, 42)
+        speed = random.uniform(0.9, 1.1)
+        soldier = Unit("일반병사", health, attack, defense, range_val, speed, grenade=True, reload_time=1)
+        team.append(soldier)
+    
+    # 통신병사 2명 생성
+    for _ in range(2):
+        health = random.randint(85, 95)
+        attack = random.randint(12, 14)
+        defense = random.randint(6, 8)
+        range_val = random.randint(40, 42)
+        speed = random.uniform(0.9, 1.1)
+        soldier = Unit("통신병사", health, attack, defense, range_val, speed, vision=100, can_transmit=True, reload_time=1.5)
+        team.append(soldier)
+    
+    # 저격병사 2명 생성
+    for _ in range(2):
+        soldier = Unit("저격병사", health=85, attack=50, defense=10, range=200, speed=0.6, vision=70, reload_time=2)
+        team.append(soldier)
+
+    # 대전차 3대, 드론 1대, 의무병사 1명, 함대 1대 추가
+    for _ in range(3):
+        team.append(Unit("대전차", health=200, attack=30, defense=20, range=50, speed=0.5, vision=40, attack_power=50, reload_time=5))
+    team.append(Unit("드론", health=30, attack=0, defense=5, range=100, speed=2.0, vision=100, view_angle=360, can_transmit=True))
+    team.append(Unit("의무병사", health=100, attack=10, defense=10, range=30, speed=1.0, heal_limit=5, reload_time=1))
+    team.append(Unit("함대", health=500, attack=100, defense=50, range=200, speed=0, vision=100, is_ship=True))
+
+    return team  # 팀 반환
+
+def save_teams(filename):
+    team1 = create_team()
+    team2 = create_team()
+    teams = {"Team1": team1, "Team2": team2}
+    
+    with open(filename, 'wb') as file:
+        pickle.dump(teams, file)
+    
+    print(f"{filename} 파일에 두 팀의 유닛 정보가 저장되었습니다.")
+
+if __name__ == "__main__":
+    save_teams("unit.pkl")
+
+# land.py
+# 지형데이터
+
+import numpy as np
+import pickle
+from noise import snoise2
+import random
+
+def generate_terrain(size, offset_x, offset_y):
+    terrain_map = np.zeros((size, size), dtype=int)
+    for i in range(size):
+        for j in range(size):
+            # 노이즈 파라미터를 조정하여 덜 복잡한 지형을 생성
+            noise_value = snoise2((i + offset_x) / 200.0, (j + offset_y) / 200.0, octaves=2, persistence=0.4, lacunarity=1.5)
+            # 지형 범위를 조정하여 다양한 지형이 나타나도록 설정
+            if noise_value < -0.3:
+                terrain_map[i][j] = 220  # 산악 (진한 회색)
+            elif noise_value < -0.1:
+                terrain_map[i][j] = 180  # 숲 (중간 회색)
+            elif noise_value < 0.1:
+                terrain_map[i][j] = 140  # 평지 (옅은 회색)
+            elif noise_value < 0.3:
+                terrain_map[i][j] = 100  # 도시 (더 옅은 회색)
+            else:
+                terrain_map[i][j] = 255  # 강 (흰색)
+    return terrain_map
+
+def save_terrain(filename, num_maps=20, size=1000):  # size를 1000으로 줄임
+    all_terrains = []
+    for _ in range(num_maps):
+        offset_x = random.randint(0, 10000)
+        offset_y = random.randint(0, 10000)
+        terrain_map = generate_terrain(size, offset_x, offset_y)
+        all_terrains.append(terrain_map)
+
+    with open(filename, 'wb') as file:
+        pickle.dump(all_terrains, file)
+    print(f"{filename} 파일에 모든 지형 데이터가 저장되었습니다.")
+
+if __name__ == "__main__":
+    save_terrain("land.pkl", num_maps=20, size=1000)  # size를 1000으로 설정
+
+# battle_module.py
+# 최적의 행동을 학습한 전투모듈 저장 코드
+
+import sys
+import os
+import gym
+from gym import spaces
+import numpy as np
+from stable_baselines3 import PPO
+import time
+
+# Soldier, AntiTank, Sniper, Drone, Medic, Airstrike 클래스를 불러오기 위한 경로 설정
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from unit.unit import Soldier, AntiTank, Sniper, Drone, Medic, Airstrike
+
+class BattleEnv(gym.Env):
+    def __init__(self):
+        super(BattleEnv, self).__init__()
+        
+        self.observation_space = spaces.Box(low=0, high=1, shape=(10,), dtype=np.float32)
+        self.action_space = spaces.Discrete(7)  # 이동(4방향), 공격, 회복, 대기 등
+        
+        self.team1_units, self.team1_airstrike = self.create_team("Team1")
+        self.team2_units, self.team2_airstrike = self.create_team("Team2")
+        
+        self.reset()
+
+    def reset(self):
+        self.state = np.random.rand(10)
+        self.done = False
+        self.steps = 0
+        self.team1_survivors = len(self.team1_units)
+        self.team2_survivors = len(self.team2_units)
+        self.team1_morale = 100
+        self.team2_morale = 100
+        return self.state
+
+    def create_team(self, team_name):
+        team = [Soldier("일반병사", 100, 20, 10, 30, 1.0) for _ in range(50)]
+        team.extend([Sniper() for _ in range(2)])
+        team.extend([AntiTank() for _ in range(3)])
+        team.append(Drone())
+        team.append(Medic())  # 의무병
+        team.extend([Soldier("통신병", 100, 10, 10, 30, 1.0, can_transmit=True) for _ in range(2)])  # 통신병
+        return team, Airstrike()
+
+    def step(self, action):
+        reward = 0
+        self.steps += 1
+
+        # 유닛별로 최적화된 행동 수행
+        for unit in self.team1_units:
+            if isinstance(unit, Soldier) or isinstance(unit, AntiTank) or isinstance(unit, Sniper):
+                # 일반병사, 대전차, 저격병사의 탐지 및 공격 처리
+                if self.can_detect_enemy(unit):
+                    target = self.find_target(unit, self.team2_units)
+                    if target and self.can_attack(unit, target):
+                        reward += self.attack_target(unit, target)
+            elif isinstance(unit, Medic):
+                # 의무병의 회복 행동
+                if self.heal_ally(unit):
+                    reward += 30
+            elif isinstance(unit, Drone):
+                # 드론의 최적화된 탐지 및 지원
+                reward += self.handle_drone(unit)
+            elif isinstance(unit, Airstrike):
+                # 공습 지원
+                reward += self.handle_airstrike(unit)
+
+        # 팀의 사기 감소 및 속도 저하
+        reward += self.update_morale()
+
+        # 승리/패배 보상 및 패널티
+        if self.team2_survivors <= 0:  # 승리 조건
+            reward += 300
+            self.done = True
+        elif self.team1_survivors <= 0:  # 패배 조건
+            reward -= 300
+            self.done = True
+        else:
+            self.done = False  # 전투가 계속됨
+
+        return self.state, reward, self.done, {}
+
+    def can_detect_enemy(self, unit):
+        """유닛이 시야 거리 및 시야각 내에서 적을 탐지할 수 있는지 확인"""
+        for enemy in self.team2_units:
+            distance = np.linalg.norm(np.array([unit.x, unit.y]) - np.array([enemy.x, enemy.y]))
+            
+            # 두 점 간의 각도 계산 (atan2 사용)
+            angle_to_enemy = np.arctan2(enemy.y - unit.y, enemy.x - unit.x)
+            
+            if distance <= unit.vision and abs(unit.view_direction - angle_to_enemy) <= unit.view_angle / 2:
+                return True
+        return False
+
+    def find_target(self, unit, enemies):
+        """공격 가능한 범위 내에서 적을 찾아 반환"""
+        for enemy in enemies:
+            distance = np.linalg.norm(np.array([unit.x, unit.y]) - np.array([enemy.x, enemy.y]))
+            if distance <= unit.range:
+                return enemy
+        return None
+
+    def can_attack(self, unit, target):
+        """장전 시간을 확인하여 공격 가능 여부를 판단"""
+        return time.time() - unit.last_attack_time >= unit.reload_time
+
+    def attack_target(self, unit, target):
+        """공격하여 적의 체력을 감소시키고 보상을 반환"""
+        damage = max(1, unit.attack_power - target.defense)
+        target.health -= damage
+        unit.last_attack_time = time.time()
+        if target.health <= 0:
+            self.team2_survivors -= 1
+            return 50  # 적 처치 보상
+        return 0
+
+    def heal_ally(self, medic):
+        """의무병이 아군의 체력을 회복"""
+        for ally in self.team1_units:
+            if ally.health < 50 and medic.healed_count < medic.heal_limit:
+                ally.health += 20
+                medic.healed_count += 1
+                return True
+        return False
+
+    def handle_drone(self, drone):
+        """드론 최적화된 행동 처리"""
+        reward = 0
+        # 드론이 적의 위치를 탐지하는 예시
+        for enemy in self.team2_units:
+            if np.linalg.norm(np.array([drone.x, drone.y]) - np.array([enemy.x, enemy.y])) <= drone.range:
+                drone.detect_enemy(enemy)
+                reward += 0.5  # 탐지 보상
+        return reward
+
+    def handle_airstrike(self, airstrike):
+        """공습 지원 최적화된 행동 처리"""
+        reward = 0
+        # Airstrike 유닛이 공격하는 예시
+        for enemy in self.team2_units:
+            if np.linalg.norm(np.array([airstrike.x, airstrike.y]) - np.array([enemy.x, enemy.y])) <= airstrike.range:
+                damage = airstrike.attack_power
+                enemy.health -= damage
+                reward += 1  # 공습 보상
+        return reward
+
+    def update_morale(self):
+        """사기에 따른 속도 감소 및 보상/패널티 적용"""
+        morale_penalty = 0
+        if self.team1_survivors < len(self.team1_units) * 0.8:
+            self.team1_morale -= 5  # 아군 사망에 따른 사기 저하
+            morale_penalty -= 10  # 사기에 따른 속도 저하 보상
+            for unit in self.team1_units:
+                unit.speed *= 0.9  # 사기 저하로 인한 속도 감소
+        return morale_penalty
+
+def predict_enemy_path(self, soldier):
+    """상대방의 이동 경로를 예측하고, 기습 공격을 위한 최적의 경로를 찾음"""
+    reward = 0
+    
+    # 1. 적의 최근 이동 경로를 기록하고 추적
+    enemy_paths = self.track_enemy_paths(soldier)
+    
+    # 2. 상대의 움직임 패턴을 분석하여 예측
+    predicted_positions = self.analyze_enemy_movement(enemy_paths)
+    
+    # 3. 병사가 기습할 수 있는 최적의 경로 찾기
+    ambush_position = self.find_ambush_position(soldier, predicted_positions)
+    
+    if ambush_position:
+        # 4. 기습 공격을 위해 병사를 해당 위치로 이동
+        reward += self.move_to_position(soldier, ambush_position)  # 기습 이동 보상
+        
+        # 5. 기습 공격
+        target = self.find_target(soldier, self.team2_units)
+        if target and self.can_attack(soldier, target):
+            reward += self.attack_target(soldier, target)  # 기습 공격 보상
+    
+    return reward
+
+def track_enemy_paths(self, soldier):
+    """적의 경로 기록 및 추적"""
+    paths = []
+    for enemy in self.team2_units:
+        path = []
+        for step in range(1, self.steps):
+            path.append((enemy.x + np.random.uniform(-2, 2), enemy.y + np.random.uniform(-2, 2)))  # 예시로 약간의 랜덤한 이동
+        paths.append(path)
+    return paths
+
+def analyze_enemy_movement(self, enemy_paths):
+    """적의 이동패턴 분석 및 예측"""
+    predicted_positions = []
+    for path in enemy_paths:
+        if len(path) >= 3:
+            recent_moves = path[-3:]
+            avg_x = np.mean([move[0] for move in recent_moves])
+            avg_y = np.mean([move[1] for move in recent_moves])
+            predicted_positions.append((avg_x, avg_y))
+    return predicted_positions
+
+def find_ambush_position(self, soldier, predicted_positions):
+    """기습"""
+    min_distance = float('inf')
+    ambush_position = None
+    for predicted_position in predicted_positions:
+        distance = np.linalg.norm(np.array([soldier.x, soldier.y]) - np.array(predicted_position))
+        if distance < min_distance:
+            min_distance = distance
+            ambush_position = predicted_position
+    return ambush_position
+
+
+
+# 학습 실행
+env = BattleEnv()
+model = PPO("MlpPolicy", env, verbose=1)
+model.learn(total_timesteps=100000)
+
+# 전투모델 저장
+obs = env.reset()
+for _ in range(100):
+    action, _states = model.predict(obs, deterministic=True)
+    obs, reward, done, info = env.step(action)
+    if done:
+        obs = env.reset()
+
+# 모델 저장
+model.save("battle_module.zip")  # 모델을 battle_module.zip으로 저장
+print("battle_module.zip에 전투모듈 저장완료")
+
+
+# data.py
+# team1 vs team2 의 1000번의 시뮬레이션 데이터 저장 코드
+
+import gzip
+import pickle
+import random
+import time
+import sys
+import os
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from unit.unit import Unit  # Unit 클래스를 별도 파일에서 가져옵니다.
+
+land_path = '../land/land.pkl'
+unit_path = '../unit/unit.pkl'
+
+def load_data():
+    with open(land_path, 'rb') as file:
+        lands = pickle.load(file)
+    with open(unit_path, 'rb') as file:
+        units = pickle.load(file)
+    return random.choice(lands), units
+
+def place_units_on_map(terrain, team_units, team_color, position="top_left"):
+    positions = []
+    size = len(terrain)
+    offset = size // 5
+
+    start_x, start_y = (0, 0) if position == "top_left" else (size - offset, size - offset)
+    for unit in team_units:
+        while True:
+            x = random.randint(start_x, start_x + offset - 1)
+            y = random.randint(start_y, start_y + offset - 1)
+            if terrain[x][y] != 255:  # 강이 아닌 곳에 배치
+                positions.append([x, y, unit, team_color])
+                break
+    return positions
+
+def simulate_battle():
+    terrain, units = load_data()
+    size = len(terrain)
+    unit_positions = {
+        'Team1': place_units_on_map(terrain, units['Team1'], 'blue', position="top_left"),
+        'Team2': place_units_on_map(terrain, units['Team2'], 'red', position="bottom_right")
+    }
+    team1_survivors, team2_survivors = len(unit_positions['Team1']), len(unit_positions['Team2'])
+    time_step = 0
+    enemy_report_team1, enemy_report_team2 = [], []
+
+    action_log = {'Team1': [], 'Team2': []}
+
+    while team1_survivors > 0 and team2_survivors > 0:
+        time_step += 1
+
+        for team, units in unit_positions.items():
+            other_team = 'Team2' if team == 'Team1' else 'Team1'
+            enemy_report = enemy_report_team1 if team == 'Team1' else enemy_report_team2
+
+            if not unit_positions[other_team]:  # 상대팀 유닛이 모두 사라지면 전투 종료
+                return "Team1" if team2_survivors == 0 else "Team2", time_step, action_log
+
+            for pos in units:
+                if pos[2].role == "통신병사" and pos[2].can_transmit:
+                    enemy_report = [(p[0], p[1]) for p in unit_positions[other_team]]
+
+            for pos in units:
+                x, y, unit, color = pos
+                if not unit_positions[other_team]:
+                    break
+
+                if enemy_report:
+                    target_candidates = enemy_report
+                else:
+                    target_candidates = [(p[0], p[1]) for p in unit_positions[other_team]]
+
+                if not target_candidates:
+                    continue
+
+                target = random.choice(target_candidates)
+                target_x, target_y = target[0], target[1]
+                move_x = 1 if target_x > x else -1 if target_x < x else 0
+                move_y = 1 if target_y > y else -1 if target_y < y else 0
+                pos[0] = max(0, min(size - 1, pos[0] + move_x))
+                pos[1] = max(0, min(size - 1, pos[1] + move_y))
+
+                distance = ((x - target_x) ** 2 + (y - target_y) ** 2) ** 0.5
+                if distance <= unit.range:
+                    other_unit = next((u for u in unit_positions[other_team] if (u[0], u[1]) == (target_x, target_y)), None)
+                    if other_unit:
+                        other_unit[2].health -= max(1, unit.attack - other_unit[2].defense)
+                        if other_unit[2].health <= 0:
+                            unit_positions[other_team].remove(other_unit)
+                            if other_team == 'Team1':
+                                team1_survivors -= 1
+                            else:
+                                team2_survivors -= 1
+
+                action_log[team].append({
+                    'unit_role': unit.role,
+                    'position': (pos[0], pos[1]),
+                    'target_position': (target_x, target_y),
+                    'action': 'attack' if distance <= unit.range else 'move'
+                })
+
+    return "Team1" if team2_survivors == 0 else "Team2", time_step, action_log
+
+def reinforcement_learning(num_simulations=1000, save_path="data.pkl.gz"):  # 압축 파일로 저장
+    results = {"Team1": 0, "Team2": 0, "time_steps": [], "action_logs": []}
+
+    for i in range(num_simulations):
+        result, time_step, action_log = simulate_battle()
+        results[result] += 1
+        results["time_steps"].append(time_step)
+        results["action_logs"].append(action_log)
+
+        # 3초마다 진행률 출력
+        print(f"진행률: {(i + 1) / num_simulations * 100:.1f}%")
+        time.sleep(3)  # 3초 지연
+
+    learning_data = {
+        "wins": results["Team1"],
+        "average_time": sum(results["time_steps"]) / num_simulations,
+        "action_logs": results["action_logs"]
+    }
+
+    # gzip으로 압축 저장
+    with gzip.open(save_path, 'wb') as file:
+        pickle.dump(learning_data, file)
+
+    print(f"{save_path}에 학습 결과 저장 완료")
+    print(f"Team1 승리 횟수: {results['Team1']}")
+    print(f"Team2 승리 횟수: {results['Team2']}")
+    print(f"평균 전투 시간: {learning_data['average_time']:.2f} steps")
+
+if __name__ == "__main__":
+    reinforcement_learning()
+
+# pred_module.py
+# 시뮬레이션 데이터를 이용한 예측모듈 생성 코드
+
+import sys
+import os
+import gzip  # gzip 추가
+import pickle
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+import joblib  # 모델 저장/로드를 위한 joblib
+import time  # 진행률 출력 간 지연을 위한 모듈
+
+# 'unit' 폴더 경로를 sys.path에 추가
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../unit')))
+
+# data.pkl.gz 파일 로드
+try:
+    with gzip.open('data.pkl.gz', 'rb') as file:
+        results = pickle.load(file)
+    print("data.pkl.gz 파일 로드 성공!")
+except Exception as e:
+    print(f"data.pkl.gz 파일 로드 실패: {e}")
+    sys.exit(1)
+
+# 데이터 키 확인
+print("데이터 키:", results.keys())
+
+# 실제 전투 데이터를 기반으로 학습 데이터 생성
+data = []
+total_samples = 50  # 생성할 샘플 수
+
+for i in range(total_samples):  # 50개의 가상 샘플 생성
+    try:
+        # 가상 데이터 생성
+        team1_loss_rate = results["average_team1_loss_rate"] + i * 0.2
+        team2_loss_rate = results["average_team2_loss_rate"] + i * 0.1
+        time_step = results.get("average_time", 100) + i * 2  # 'average_time' 키가 없을 경우 기본값 100 사용
+        team1_win = 1 if i % 2 == 0 else 0  # 번갈아 승패 설정
+        data.append({
+            "team1_loss_rate": team1_loss_rate,
+            "team2_loss_rate": team2_loss_rate,
+            "time_step": time_step,
+            "team1_win": team1_win
+        })
+        # 진행률 출력
+        print(f"진행률: {(i + 1) / total_samples * 100:.1f}%")
+        time.sleep(0.1)  # 진행률 출력 간 지연
+    except KeyError as e:
+        print(f"데이터 생성 중 키 오류 발생: {e}")
+        sys.exit(1)
+
+# DataFrame 생성
+df = pd.DataFrame(data)
+print("\n학습 데이터 생성 완료!")
+print(df.head())  # 샘플 데이터 확인
+
+# 특성(Feature)와 레이블(Label) 설정
+X = df[["team1_loss_rate", "team2_loss_rate", "time_step"]]  # 특성
+y = df["team1_win"]  # 레이블
+
+# 로지스틱 회귀 모델 학습
+try:
+    print("\n로지스틱 회귀 모델 학습 중...")
+    model = LogisticRegression(max_iter=10000, C=0.1)
+    model.fit(X, y)
+    print("모델 학습 완료!")
+except Exception as e:
+    print(f"모델 학습 중 오류 발생: {e}")
+    sys.exit(1)
+
+# 모델 저장
+try:
+    joblib.dump(model, 'pred_module.zip')
+    print("모델 저장 완료: pred_module.zip")
+except Exception as e:
+    print(f"모델 저장 중 오류 발생: {e}")
+
+# mainfield.py
+# 전투, 예측모듈과 유닛, 지형데이터를 활용한 실제 예측 코드
+
+import os
+import pickle
+import random
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+import joblib
+
+# 경로 설정
+unit_path = "../unit/unit.pkl"
+land_path = "../land/land.pkl"
+battle_module_path = "../module/battle_module.zip"
+pred_module_path = "../module/pred_module.zip"
+
+# 데이터 로드 함수
+def load_data():
+    with open(unit_path, "rb") as unit_file, open(land_path, "rb") as land_file:
+        units = pickle.load(unit_file)
+        terrain = random.choice(pickle.load(land_file))  # 랜덤한 전투 지형 선택
+    return units, terrain
+
+# 전투 시뮬레이션 함수
+def simulate_battle(team1_units, team2_units, terrain, battle_model):
+    team1_loss = 0
+    team2_loss = 0
+    time_step = 0
+
+    # Team1에 battle_module.zip 전략 적용
+    for unit in team1_units:
+        unit["health"] *= 1.1  # Team1 유닛의 체력 10% 강화 (예시 전략)
+        unit["attack"] *= 1.2  # Team1 유닛의 공격력 20% 강화
+
+    # 단순 전투 시뮬레이션 로직
+    while team1_units and team2_units:
+        time_step += 1
+
+        # Team1과 Team2의 손실 계산
+        team1_loss += sum(1 for unit in team1_units if unit["health"] <= 0)
+        team2_loss += sum(1 for unit in team2_units if unit["health"] <= 0)
+
+        # 랜덤으로 유닛 제거 (간단한 전투 시뮬레이션 예시)
+        if random.random() < 0.5:
+            team1_units.pop()  # Team1 손실
+        if random.random() < 0.5:
+            team2_units.pop()  # Team2 손실
+
+        # 최대 100 스텝까지만 진행
+        if time_step > 100:
+            break
+
+    # 손실률 계산
+    team1_loss_rate = team1_loss / (team1_loss + len(team1_units)) * 100
+    team2_loss_rate = team2_loss / (team2_loss + len(team2_units)) * 100
+
+    return team1_loss_rate, team2_loss_rate, time_step
+
+# 예측 함수
+def predict_battle_result(team1_loss_rate, team2_loss_rate, time_step, pred_model):
+    new_battle = {
+        "team1_loss_rate": team1_loss_rate,
+        "team2_loss_rate": team2_loss_rate,
+        "time_step": time_step
+    }
+    new_data = pd.DataFrame([new_battle])
+    predicted_result = pred_model.predict(new_data)
+    predicted_proba = pred_model.predict_proba(new_data)
+
+    print("\n=== 예측 결과 ===")
+    print(f"예측된 승리 팀: {'Team 1' if predicted_result[0] == 1 else 'Team 2'}")
+    print(f"Team 1 승리 확률: {predicted_proba[0][1] * 100:.2f}%")
+    print(f"Team 2 승리 확률: {predicted_proba[0][0] * 100:.2f}%")
+    print("\n=== 입력된 손실률 ===")
+    print(f"Team 1 손실률: {new_battle['team1_loss_rate']}%")
+    print(f"Team 2 손실률: {new_battle['team2_loss_rate']}%")
+    print(f"Time Step: {new_battle['time_step']}")
+
+# 메인 실행 코드
+if __name__ == "__main__":
+    # 데이터 로드
+    units, terrain = load_data()
+    team1_units = units["Team1"]
+    team2_units = units["Team2"]
+
+    # battle_module.zip 로드 (Team1 전략 적용)
+    if os.path.exists(battle_module_path):
+        battle_model = joblib.load(battle_module_path)
+        print("전투 모듈(battle_module.zip)이 로드되었습니다.")
+    else:
+        print("전투 모듈(battle_module.zip)이 존재하지 않습니다.")
+        exit()
+
+    # pred_module.zip 로드 (예측 모델)
+    if os.path.exists(pred_module_path):
+        pred_model = joblib.load(pred_module_path)
+        print("예측 모듈(pred_module.zip)이 로드되었습니다.")
+    else:
+        print("예측 모듈(pred_module.zip)이 존재하지 않습니다.")
+        exit()
+
+    # 전투 시뮬레이션 실행
+    team1_loss_rate, team2_loss_rate, time_step = simulate_battle(
+        team1_units, team2_units, terrain, battle_model
+    )
+
+    # 예측 결과 출력
+    predict_battle_result(team1_loss_rate, team2_loss_rate, time_step, pred_model)
